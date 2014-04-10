@@ -60,6 +60,7 @@ add_library(Exec STATIC
   select-node.cc
   text-converter.cc
   topn-node.cc
+  pythia-reader-node.cc
 )
 
 ADD_BE_TEST(zigzag-test)

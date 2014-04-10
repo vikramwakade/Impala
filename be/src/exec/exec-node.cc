@@ -32,6 +32,7 @@
 #include "exec/cross-join-node.h"
 #include "exec/topn-node.h"
 #include "exec/select-node.h"
+#include "exec/pythia-reader-node.h"
 #include "runtime/descriptors.h"
 #include "runtime/mem-tracker.h"
 #include "runtime/mem-pool.h"
@@ -61,6 +62,9 @@ ExecNode::RowBatchQueue::~RowBatchQueue() {
 }
 
 void ExecNode::RowBatchQueue::AddBatch(RowBatch* batch) {
+  stringstream stream;
+  batch->PrintBatch(&stream);
+  cout << stream.str();
   if (!BlockingPut(batch)) {
     ScopedSpinLock l(&lock_);
     cleanup_queue_.push_back(batch);
@@ -228,7 +232,8 @@ Status ExecNode::CreateNode(ObjectPool* pool, const TPlanNode& tnode,
   stringstream error_msg;
   switch (tnode.node_type) {
     case TPlanNodeType::HDFS_SCAN_NODE:
-      *node = pool->Add(new HdfsScanNode(pool, tnode, descs));
+      *node = pool->Add(new PythiaReaderNode(pool, tnode, descs));
+      //*node = pool->Add(new HdfsScanNode(pool, tnode, descs));
       break;
     case TPlanNodeType::HBASE_SCAN_NODE:
       *node = pool->Add(new HBaseScanNode(pool, tnode, descs));

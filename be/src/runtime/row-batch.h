@@ -24,6 +24,7 @@
 #include "runtime/descriptors.h"
 #include "runtime/disk-io-mgr.h"
 #include "runtime/mem-pool.h"
+#include "runtime/raw-value.h"  // for PrintBatch()
 
 namespace impala {
 
@@ -172,6 +173,11 @@ class RowBatch {
   // Returns the uncompressed serialized size (this will be the true size of output_batch
   // if tuple_data is actually uncompressed).
   int Serialize(TRowBatch* output_batch);
+
+  // Author: Vikram
+  // Output the batch to a string, each row delimited by '\n'
+  // Slots are written as comma separated values
+  void PrintBatch(std::stringstream* stream);
 
   // Utility function: returns total size of batch.
   static int GetBatchSize(const TRowBatch& batch);

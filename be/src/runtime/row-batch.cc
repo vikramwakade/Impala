@@ -203,6 +203,29 @@ int RowBatch::Serialize(TRowBatch* output_batch) {
   return GetBatchSize(*output_batch) - output_batch->tuple_data.size() + size;
 }
 
+void RowBatch::PrintBatch(std::stringstream* stream) {
+  for (int i = 0; i < num_rows_; ++i) {
+    TupleRow* row = GetRow(i);
+    const vector<TupleDescriptor*>& tuple_descs = row_desc_.tuple_descriptors();
+    vector<TupleDescriptor*>::const_iterator desc = tuple_descs.begin();
+    for (int j = 0; desc != tuple_descs.end(); ++desc, ++j) {
+      Tuple* tuple = row->GetTuple(j);
+      for (vector<SlotDescriptor*>::const_iterator k = (*desc)->slots().begin(); 
+        k != (*desc)->slots().end(); ++k) {
+        if((*k)->is_materialized()) {
+          if(k != (*desc)->slots().begin())
+            *stream << ",";
+          *stream << TypeToString((*k)->type()) << ":";
+          // Get the pointer to the slot in the tuple
+          void* value = tuple->GetSlot((*k)->tuple_offset());
+          RawValue::PrintValue(value, (*k)->type(), -1, stream);
+        }
+      }
+      *stream << endl;
+    }
+  }
+}
+
 void RowBatch::AddIoBuffer(DiskIoMgr::BufferDescriptor* buffer) {
   DCHECK(buffer != NULL);
   io_buffers_.push_back(buffer);

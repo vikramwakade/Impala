@@ -92,6 +92,7 @@ int main(int argc, char** argv) {
   EXIT_IF_ERROR(hs2_server->Start());
   ImpaladMetrics::IMPALA_SERVER_READY->Update(true);
   LOG(INFO) << "Impala has started.";
+  cout << "Impala has started";
   beeswax_server->Join();
   hs2_server->Join();
 
