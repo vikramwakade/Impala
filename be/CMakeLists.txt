@@ -167,6 +167,15 @@ else()
   set(BUILD_OUTPUT_ROOT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/build/release/")
 endif()
 
+# For Pythia
+INCLUDE_DIRECTORIES(
+  /home/vikram/Impala/be/src/pythia/dist/include
+)
+
+LINK_DIRECTORIES(
+  /home/vikram/Impala/be/src/pythia/dist/lib
+)
+
 # This is a list of impala library dependencies. Individual libraries
 # must not specify library dependencies in their own CMakeLists.txt file.
 # Enclose the impala libraries in -Wl,--start-group and -Wl,--end-group
@@ -215,6 +224,7 @@ set (IMPALA_LINK_LIBS
   ${LIBBZ2}
   ${AVRO_STATIC_LIB}
   -lrt -lboost_date_time
+  -lconfig++    # For Pythia
 )
 
 
@@ -307,6 +317,7 @@ link_directories(
   ${CMAKE_CURRENT_SOURCE_DIR}/build/common
   ${CMAKE_CURRENT_SOURCE_DIR}/build/exec
   ${CMAKE_CURRENT_SOURCE_DIR}/build/exprs
+  ${CMAKE_CURRENT_SOURCE_DIR}/build/pythia   # Vikram
   ${CMAKE_CURRENT_SOURCE_DIR}/build/rpc
   ${CMAKE_CURRENT_SOURCE_DIR}/build/runtime
   ${CMAKE_CURRENT_SOURCE_DIR}/build/statestore

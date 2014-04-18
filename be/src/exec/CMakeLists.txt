@@ -61,6 +61,56 @@ add_library(Exec STATIC
   text-converter.cc
   topn-node.cc
   pythia-reader-node.cc
+  shm-scan-node.cc
+  ../pythia/schema.cpp 
+  ../pythia/hash.cpp 
+  ../pythia/ProcessorMap.cpp 
+  ../pythia/Barrier.cpp
+  ../pythia/perfcounters.cpp
+  ../pythia/query.cpp
+  ../pythia/util/hashtable.cpp
+  ../pythia/util/buffer.cpp
+  ../pythia/visitors/recursivedestroy.cpp
+  ../pythia/visitors/recursivefree.cpp
+  ../pythia/visitors/prettyprint.cpp
+  ../pythia/visitors/threadinit.cpp
+  ../pythia/visitors/threadclose.cpp
+  ../pythia/operators/base.cpp
+  ../pythia/operators/mapwrapper.cpp
+  ../pythia/operators/filter.cpp
+  ../pythia/operators/sortlimit.cpp
+  ../pythia/operators/genericaggregate.cpp
+  ../pythia/operators/aggregatecount.cpp
+  ../pythia/operators/aggregatesum.cpp
+  ../pythia/operators/scan.cpp
+  ../pythia/operators/partitionedscan.cpp
+  ../pythia/operators/parallelscan.cpp
+  ../pythia/operators/merge.cpp
+  ../pythia/operators/join.cpp
+  ../pythia/operators/shuffle.cpp
+  ../pythia/operators/cycleaccountant.cpp
+  ../pythia/util/affinitizer.cpp
+  ../pythia/operators/project.cpp
+  ../pythia/comparator.cpp
+  ../pythia/conjunctionevaluator.cpp
+  ../pythia/rawcompfns.cpp
+  ../pythia/operators/memsegmentwriter.cpp
+  ../pythia/operators/loaders/table.cpp
+  ../pythia/operators/loaders/sfmt/SFMT.c
+  ../pythia/operators/loaders/parser.cpp
+  ../pythia/operators/loaders/loader.cpp
+  ../pythia/operators/checker_callstate.cpp
+  ../pythia/operators/printer_tuplecount.cpp
+  ../pythia/operators/generator_int.cpp
+  ../pythia/operators/printer_perfcnt.cpp
+  ../pythia/operators/bitentropy.cpp
+  ../pythia/operators/threadidprepend.cpp
+  ../pythia/util/numaasserts.cpp
+  ../pythia/util/numaallocate.cpp
+  ../pythia/operators/consume.cpp
+  ../pythia/operators/sortandrangepartition.cpp
+  ../pythia/operators/partition.cpp
+  ../pythia/operators/indexjoin.cpp
 )
 
 ADD_BE_TEST(zigzag-test)
