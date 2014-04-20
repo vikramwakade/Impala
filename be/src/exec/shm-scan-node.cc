@@ -24,7 +24,7 @@ ShmScanNode::ShmScanNode(ObjectPool* pool, const TPlanNode& tnode,
       tuple_(NULL),
       batch_(NULL),
       done_(false) {
-  max_materialized_row_batches_ = 1;
+  max_materialized_row_batches_ = 10;   // Need to look at this
   materialized_row_batches_.reset(new RowBatchQueue(max_materialized_row_batches_));
 }
 
@@ -37,6 +37,8 @@ Status ShmScanNode::Prepare(RuntimeState* state) {
 
   tuple_desc_ = state->desc_tbl().GetTupleDescriptor(tuple_id_);
   DCHECK(tuple_desc_ != NULL);
+
+  num_null_bytes_ = tuple_desc_->num_null_bytes();
 
   // Create mapping from column index in table to slot index in output tuple.
   // First, initialize all columns to SKIP_COLUMN.
@@ -88,7 +90,8 @@ void ShmScanNode::ScannerThread() {
 
   StartNewRowBatch();
   int i = 0;
-  while (i < 20) {
+  int num_batches = 1000;
+  while (i < num_batches) {
     MemPool* pool;
     TupleRow* tuple_row;
     int max_tuples = GetMemory(&pool, &tuple_, &tuple_row);
@@ -102,7 +105,7 @@ void ShmScanNode::ScannerThread() {
       num_tuples_materialized = WriteEmptyTuples(tuple_row, max_tuples);
     }
     // Commit the rows to the row batch and scan node
-    if (i == 19)
+    if (i == num_batches-1)
       CommitRows(num_tuples_materialized, true);
     else
       CommitRows(num_tuples_materialized, false);
@@ -143,18 +146,11 @@ int ShmScanNode::WriteAlignedTuples(MemPool* pool, TupleRow* tuple_row, int num_
 
 int ShmScanNode::WriteEmptyTuples(TupleRow* tuple_row, int num_tuples) {
   return num_tuples;
-  // Commented since template tuples are not implemented
-  /*row->SetTuple(tuple_idx(), template_tuple_);
-  if (!ExecNode::EvalConjuncts(&(*conjuncts_)[0], num_conjuncts_, row)) return 0;
-  row = next_row(row);
-
-  for (int n = 1; n < num_tuples; ++n) {
-    row->SetTuple(tuple_idx(), template_tuple_);
-    row = next_row(row);
-  }*/
 }
 
-bool ShmScanNode::WriteCompleteTuple(MemPool* pool, Tuple* tuple, TupleRow* tuple_row, int val) {
+bool ShmScanNode::WriteCompleteTuple(MemPool* pool, Tuple* tuple, TupleRow* tuple_row, int32_t val) {
+  // Initialize tuple before materializing slots
+  InitTuple(tuple);
 
   for (int i = 0; i < materialized_slots_.size(); ++i) {
     SlotDescriptor* desc = materialized_slots_[i];

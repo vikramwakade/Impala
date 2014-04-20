@@ -176,7 +176,7 @@ string PrintTuple(const Tuple* t, const TupleDescriptor& d) {
       out << " ";
     }
     if (t->IsNull(slot_d->null_indicator_offset())) {
-      out << "null";
+      out << "null-slot";
     } else {
       string value_str;
       RawValue::PrintValue(

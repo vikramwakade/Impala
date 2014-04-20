@@ -4,6 +4,7 @@
 
 #include <boost/scoped_ptr.hpp>
 #include <boost/thread/mutex.hpp>
+#include <sstream>
 
 #include "runtime/runtime-state.h"
 #include "runtime/row-batch.h"
@@ -14,16 +15,18 @@
 using namespace impala;
 using namespace std;
 using namespace boost;
+using namespace libconfig;
 
 PythiaReaderNode::PythiaReaderNode(ObjectPool* pool, const TPlanNode& tnode, 
 	                               const DescriptorTbl& descs)
     : ExecNode(pool, tnode, descs),
+      runtime_state_(NULL),
+      tuple_desc_(NULL),
       tuple_id_(tnode.hdfs_scan_node.tuple_id),
-      batch_(NULL),
       tuple_(NULL),
-      done_(false),
-      tuple_desc_(NULL) {
-  max_materialized_row_batches_ = 10;
+      batch_(NULL),
+      done_(false) {
+  max_materialized_row_batches_ = 10;   // Need to look at this
   materialized_row_batches_.reset(new RowBatchQueue(max_materialized_row_batches_));
 }
 
@@ -31,11 +34,13 @@ PythiaReaderNode::~PythiaReaderNode() {
 }
 
 Status PythiaReaderNode::Prepare(RuntimeState* state) {
+  runtime_state_ = state;
   RETURN_IF_ERROR(ExecNode::Prepare(state));
+
   tuple_desc_ = state->desc_tbl().GetTupleDescriptor(tuple_id_);
-  batch_ = new RowBatch(row_desc(), state->batch_size(), mem_tracker());
-  tuple_mem_ =
-      batch_->tuple_data_pool()->Allocate(state->batch_size() * tuple_desc_->byte_size());
+  DCHECK(tuple_desc_ != NULL);
+
+  num_null_bytes_ = tuple_desc_->num_null_bytes();
 
   // Create mapping from column index in table to slot index in output tuple.
   // First, initialize all columns to SKIP_COLUMN.
@@ -71,30 +76,121 @@ Status PythiaReaderNode::Prepare(RuntimeState* state) {
   return Status::OK;
 }
 
-Status PythiaReaderNode::Open(RuntimeState* state) {
-  MemPool* pool;
-  TupleRow* tuple_row;
-  int max_tuples = GetMemory(&pool, &tuple_, &tuple_row);
+void PythiaReaderNode::StartNewRowBatch() {
+  batch_ = new RowBatch(row_desc(), runtime_state_->batch_size(), mem_tracker());
+  tuple_mem_ =
+      batch_->tuple_data_pool()->Allocate(runtime_state_->batch_size() * tuple_desc_->byte_size());
+}
 
-  DCHECK_GT(max_tuples, 0);
-  DCHECK(tuple_ != NULL);
+void PythiaReaderNode::fail(const char* explanation) {
+  std::cout << " ** FAILED: " << explanation << std::endl;
+  throw QueryExecutionError();
+}
 
-  uint8_t* tuple_row_mem = reinterpret_cast<uint8_t*>(tuple_row);
-  uint8_t* tuple_mem = reinterpret_cast<uint8_t*>(tuple_);
-  Tuple* tuple = reinterpret_cast<Tuple*>(tuple_mem);
+Status PythiaReaderNode::compute() 
+{
+  Operator::GetNextResultT result; 
+  result.first = Operator::Ready;
+  stringstream stream;
 
-  for (int counter = 1; counter <= 100; counter++) {
-    // Materialize a single tuple.
-    if (WriteCompleteTuple(pool, tuple, tuple_row, counter)) {
-      tuple_mem += tuple_desc_->byte_size();
-      tuple_row_mem += batch_->row_byte_size();
-      tuple = reinterpret_cast<Tuple*>(tuple_mem);
-      tuple_row = reinterpret_cast<TupleRow*>(tuple_row_mem);
+  clock_t t1,t2;
+  t1 = clock();
+
+  if (q.scanStart() == Operator::Error)
+    fail("Scan initialization failed.");
+
+  while(result.first == Operator::Ready) {
+    result = q.getNext();
+    if (result.first == Operator::Error)
+      fail("GetNext returned error.");
+
+    StartNewRowBatch();
+
+    Operator::Page::Iterator it = result.second->createIterator();
+    void* ptuple;
+    int64_t val;
+    int counter;
+    while (true) {
+      MemPool* pool;
+      TupleRow* tuple_row;
+      int max_tuples = GetMemory(&pool, &tuple_, &tuple_row);
+
+      DCHECK_GT(max_tuples, 0);
+      DCHECK(tuple_ != NULL);
+      counter = 0;
+
+      uint8_t* tuple_row_mem = reinterpret_cast<uint8_t*>(tuple_row);
+      uint8_t* tuple_mem = reinterpret_cast<uint8_t*>(tuple_);
+      Tuple* tuple = reinterpret_cast<Tuple*>(tuple_mem);
+      while ((ptuple = it.next())) {
+        stream.str(std::string());
+        stream << q.getOutSchema().prettyprint(ptuple, '|') << endl;
+        //sscanf(stream.str().c_str(), "%ld\n", &val);
+        sscanf(stream.str().c_str(), "%*d|%ld\n", &val);
+        if (WriteCompleteTuple(pool, tuple, tuple_row, val)) {
+          counter++;
+          tuple_mem += tuple_desc_->byte_size();
+          tuple_row_mem += batch_->row_byte_size();
+          tuple = reinterpret_cast<Tuple*>(tuple_mem);
+          tuple_row = reinterpret_cast<TupleRow*>(tuple_row_mem);
+        } else {
+          counter++;
+        }
+
+        if (counter == max_tuples) {
+          RETURN_IF_ERROR(CommitRows(counter));
+          break;
+        }
+      }
+      DCHECK_LE(counter, max_tuples);
+      if (counter != max_tuples) {
+        RETURN_IF_ERROR(CommitLastRows(counter));
+        break;
+      }
     }
   }
-  // Commit the rows to the row batch and scan node
-  RETURN_IF_ERROR(CommitRows(100));
 
+  if (q.scanStop() == Operator::Error) 
+    fail("Scan stop failed.");
+
+  SetDone();
+
+  t2 = clock();
+  float diff ((float)t2-(float)t1);
+  cout << "ResponseTimeInSec: " << diff / CLOCKS_PER_SEC << endl;
+
+  return Status::OK;
+}
+
+void PythiaReaderNode::ScannerThread() {
+  Config cfg;
+
+  clock_t t1,t2;
+  t1 = clock();
+
+  cfg.readFile("/home/vikram/pythia/drivers/test3.conf");
+  q.create(cfg);
+
+  t2 = clock();
+  float diff ((float)t2-(float)t1);
+  cout << "CreateConfigTimeInSec: " << diff / CLOCKS_PER_SEC << endl;
+
+  q.threadInit();
+
+  t1 = clock();
+  diff = ((float)t1-(float)t2);
+  cout << "ThreadInitTimeInSec: " << diff / CLOCKS_PER_SEC << endl;
+
+  compute();
+
+  q.threadClose();
+
+  q.destroy();
+}
+
+Status PythiaReaderNode::Open(RuntimeState* state) {
+  thread =
+    new Thread("pythia-reader-node", "scanner-thread(1)", &PythiaReaderNode::ScannerThread, this);
   return Status::OK;
 }
 
@@ -121,13 +217,28 @@ Status PythiaReaderNode::GetNextInternal(RuntimeState* state, RowBatch* row_batc
 
   RowBatch* materialized_batch = materialized_row_batches_->GetBatch();
   if (materialized_batch != NULL) {
+    num_owned_io_buffers_ -= materialized_batch->num_io_buffers();
     row_batch->AcquireState(materialized_batch);
+    // Update the number of materialized rows instead of when they are materialized.
+    // This means that scanners might process and queue up more rows than are necessary
+    // for the limit case but we want to avoid the synchronized writes to
+    // num_rows_returned_
+    num_rows_returned_ += row_batch->num_rows();
+    COUNTER_SET(rows_returned_counter_, num_rows_returned_);
     
+    if (ReachedLimit()) {
+      int num_rows_over = num_rows_returned_ - limit_;
+      row_batch->set_num_rows(row_batch->num_rows() - num_rows_over);
+      num_rows_returned_ -= num_rows_over;
+      COUNTER_SET(rows_returned_counter_, num_rows_returned_);
+
+      *eos = true;
+      SetDone();
+    }
     DCHECK_EQ(materialized_batch->num_io_buffers(), 0);
     delete materialized_batch;
-    //*eos = false;
-    //return Status::OK;
-    SetDone();
+    *eos = false;
+    return Status::OK;
   }
 
   *eos = true;
@@ -137,6 +248,11 @@ Status PythiaReaderNode::GetNextInternal(RuntimeState* state, RowBatch* row_batc
 void PythiaReaderNode::Close(RuntimeState* state) {
   if (is_closed()) return;
   SetDone();
+
+  thread->Join();
+
+  num_owned_io_buffers_ -= materialized_row_batches_->Cleanup();
+  DCHECK_EQ(num_owned_io_buffers_, 0) << "ScanNode has leaked io buffers";
 
   ExecNode::Close(state);
 }
@@ -150,13 +266,16 @@ void PythiaReaderNode::SetDone() {
   materialized_row_batches_->Shutdown();
 }
 
-bool PythiaReaderNode::WriteCompleteTuple(MemPool* pool, Tuple* tuple, TupleRow* tuple_row, int val) {
+bool PythiaReaderNode::WriteCompleteTuple(MemPool* pool, Tuple* tuple, 
+                  TupleRow* tuple_row, int64_t val) {
+  // Initialize tuple before materializing slots
+  InitTuple(tuple);
 
   for (int i = 0; i < materialized_slots_.size(); ++i) {
     SlotDescriptor* desc = materialized_slots_[i];
     
     void* slot = tuple->GetSlot(desc->tuple_offset());
-    *reinterpret_cast<int32_t*>(slot) = val;
+    *reinterpret_cast<int64_t*>(slot) = val;
   }
 
   tuple_row->SetTuple(tuple_idx(), tuple);
@@ -169,9 +288,20 @@ Status PythiaReaderNode::CommitRows(int num_rows) {
   batch_->CommitRows(num_rows);
   tuple_mem_ += tuple_desc_->byte_size() * num_rows;
 
-  // Ideally should check if the batch is full but here we are not 
-  // adding any more rows, so can push the batch_ in the queue
-  materialized_row_batches_->AddBatch(batch_);
+  if (batch_->IsFull() || batch_->AtResourceLimit()) {
+    materialized_row_batches_->AddBatch(batch_);
+    StartNewRowBatch();
+  }
 
+  return Status::OK;
+}
+
+Status PythiaReaderNode::CommitLastRows(int num_rows) {
+  DCHECK(batch_ != NULL);
+  DCHECK_LE(num_rows, batch_->capacity() - batch_->num_rows());
+  batch_->CommitRows(num_rows);
+  tuple_mem_ += tuple_desc_->byte_size() * num_rows;
+
+  materialized_row_batches_->AddBatch(batch_);
   return Status::OK;
 }

@@ -9,11 +9,15 @@
 
 #include <boost/scoped_ptr.hpp>
 
+#include "libconfig.h++"
+#include "pythia/query.h"
+#include "pythia/visitors/allvisitors.h"
 #include "exec/exec-node.h"
 #include "runtime/tuple.h"
 #include "runtime/tuple-row.h"
 #include "runtime/descriptors.h"
 #include "runtime/string-buffer.h"
+#include "util/thread.h"
 
 #include "gen-cpp/PlanNodes_types.h"
 
@@ -22,7 +26,6 @@ namespace impala {
 class MemPool;
 class SlotDescriptor;
 class Status;
-class TextConverter;
 class Tuple;
 class TupleDescriptor;
 class TPlanNode;
@@ -51,8 +54,19 @@ class PythiaReaderNode : public ExecNode {
   const static int SKIP_COLUMN = -1;
 
  private:
+  RuntimeState* runtime_state_;
+
+  // Query object used by Pythia to execute the query
+  Query q;
+
   // Descriptor for tuples this node constructs
   const TupleDescriptor* tuple_desc_;
+
+  // Tuple id resolved in Prepare() to set tuple_desc_;
+  const int tuple_id_;
+
+  // Number of null bytes in the tuple.
+  int32_t num_null_bytes_;
 
   // The tuple memory of batch_.
   uint8_t* tuple_mem_;
@@ -67,9 +81,6 @@ class PythiaReaderNode : public ExecNode {
   // Maximum size of materialized_row_batches_.
   int max_materialized_row_batches_;
 
-  // Tuple id resolved in Prepare() to set tuple_desc_;
-  const int tuple_id_;
-
   // Outgoing row batches queue. Row batches are produced asynchronously by the scanner
   // threads and consumed by the main thread.
   boost::scoped_ptr<RowBatchQueue> materialized_row_batches_;
@@ -78,9 +89,13 @@ class PythiaReaderNode : public ExecNode {
   RowBatch* batch_;
 
   // Vector containing indices into materialized_slots_.  The vector is indexed by
-  // the slot_desc's col_pos.  Non-materialized slots and partition key slots will
-  // have SKIP_COLUMN as its entry.
+  // the slot_desc's col_pos.  Non-materialized slots will have SKIP_COLUMN as its entry.
   std::vector<int> column_idx_to_materialized_slot_idx_;
+
+  // This is the number of io buffers that are owned by the scan node and the scanners.
+  // This is used just to help debug leaked io buffers to determine if the leak is
+  // happening in the scanners vs other parts of the execution.
+  AtomicInt<int> num_owned_io_buffers_;
 
   // Lock protects access between scanner thread and main query thread (the one calling
   // GetNext()) for all fields below.  If this lock and any other locks needs to be taken
@@ -93,8 +108,25 @@ class PythiaReaderNode : public ExecNode {
   // This should not be explicitly set. Instead, call SetDone().
   bool done_;
 
+  // Thread to scan the shared memory file
+  Thread* thread;
+
+  // Execute the query by calling Pythia
+  Status compute();
+
+  // Pythia's funtion
+  void fail(const char* explanation);
+
   // Checks for eos conditions and returns batches from materialized_row_batches_.
   Status GetNextInternal(RuntimeState* state, RowBatch* row_batch, bool* eos);
+
+  // Set batch_ to a new row batch and update tuple_mem_ accordingly.
+  void StartNewRowBatch();
+
+  // Main function for scanner thread. This thread pulls the next range to be
+  // processed from shared memory and then processes the entire range end to end.
+  // This thread terminates when all the data from shared memory table has been read.
+  void ScannerThread();
 
   // Gets memory for outputting tuples into batch_.
   //  *pool is the mem pool that should be used for memory allocated for those tuples.
@@ -106,12 +138,22 @@ class PythiaReaderNode : public ExecNode {
   // call GetMemory again after calling this function.
   int GetMemory(MemPool** pool, Tuple** tuple_mem, TupleRow** tuple_row_mem);
 
-  bool WriteCompleteTuple(MemPool* pool, Tuple* tuple, TupleRow* tuple_row, int val);
+  bool WriteCompleteTuple(MemPool* pool, Tuple* tuple, TupleRow* tuple_row, int64_t val);
+
+  // Initialize a tuple.
+  // Assumption - there are no null slots!
+  void InitTuple(Tuple* tuple) {
+    memset(tuple, 0, sizeof(uint8_t) * num_null_bytes_);
+  }
 
   // Commit num_rows to the current row batch.  If this completes the row batch, the
   // row batch is enqueued with the scan node and StartNewRowBatch is called.
   // Returns Status::OK if the query is not cancelled and hasn't exceeded any mem limits.
   Status CommitRows(int num_rows);
+
+  // Commit num_rows to the current row batch.  The row batch is enqueued 
+  // with the scan node and StartNewRowBatch is called.
+  Status CommitLastRows(int num_rows);
 
   // sets done_ to true and triggers threads to cleanup. Cannot be calld with
   // any locks taken. Calling it repeatedly ignores subsequent calls.

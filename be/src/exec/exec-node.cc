@@ -33,6 +33,7 @@
 #include "exec/topn-node.h"
 #include "exec/select-node.h"
 #include "exec/pythia-reader-node.h"
+#include "exec/shm-scan-node.h"
 #include "runtime/descriptors.h"
 #include "runtime/mem-tracker.h"
 #include "runtime/mem-pool.h"
@@ -62,9 +63,7 @@ ExecNode::RowBatchQueue::~RowBatchQueue() {
 }
 
 void ExecNode::RowBatchQueue::AddBatch(RowBatch* batch) {
-  stringstream stream;
-  batch->PrintBatch(&stream);
-  cout << stream.str();
+  //cout << PrintBatch(batch);
   if (!BlockingPut(batch)) {
     ScopedSpinLock l(&lock_);
     cleanup_queue_.push_back(batch);
@@ -231,9 +230,21 @@ Status ExecNode::CreateNode(ObjectPool* pool, const TPlanNode& tnode,
                             const DescriptorTbl& descs, ExecNode** node) {
   stringstream error_msg;
   switch (tnode.node_type) {
+    //case TPlanNodeType::MAGIC_NODE:
+    //  cout << "Using Pythia" << endl;
+    //  *node = pool->Add(new PythiaReaderNode(pool, tnode, descs));
+    //  break;
     case TPlanNodeType::HDFS_SCAN_NODE:
-      *node = pool->Add(new PythiaReaderNode(pool, tnode, descs));
-      //*node = pool->Add(new HdfsScanNode(pool, tnode, descs));
+      if (descs.GetTupleDescriptor(0)->table_desc()->name().find("pythia") != string::npos) {
+        cout << "Using Pythia" << endl;
+        *node = pool->Add(new PythiaReaderNode(pool, tnode, descs));
+        //cout << "Using Shared Memory Reader" << endl;
+        //*node = pool->Add(new ShmScanNode(pool, tnode, descs));
+      }
+      else {
+        cout << "Using Impala" << endl;
+        *node = pool->Add(new HdfsScanNode(pool, tnode, descs));
+      }
       break;
     case TPlanNodeType::HBASE_SCAN_NODE:
       *node = pool->Add(new HBaseScanNode(pool, tnode, descs));

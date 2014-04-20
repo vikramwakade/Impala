@@ -119,6 +119,12 @@ Status ExchangeNode::GetNext(RuntimeState* state, RowBatch* output_batch, bool* 
     {
       SCOPED_TIMER(state->total_network_wait_timer());
       input_batch_.reset(stream_recvr_->GetBatch(&is_cancelled));
+      /* Start
+      if (input_batch_.get() != NULL) {
+        stringstream stream;
+        input_batch_->PrintBatch(&stream);
+        cout << stream.str();
+      } */ //end
     }
     VLOG_FILE << "exch: has batch=" << (input_batch_.get() == NULL ? "false" : "true")
               << " #rows=" << (input_batch_.get() != NULL ? input_batch_->num_rows() : 0)

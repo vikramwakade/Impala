@@ -160,6 +160,11 @@ Status AggregationNode::Open(RuntimeState* state) {
     RETURN_IF_ERROR(children_[0]->GetNext(state, &batch, &eos));
     SCOPED_TIMER(build_timer_);
 
+    // Start
+    //stringstream stream;
+    //batch.PrintBatch(&stream);
+    //cout << stream.str();
+    // End
     if (VLOG_ROW_IS_ON) {
       for (int i = 0; i < batch.num_rows(); ++i) {
         TupleRow* row = batch.GetRow(i);

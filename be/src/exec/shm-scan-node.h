@@ -59,6 +59,9 @@ class ShmScanNode : public ExecNode {
   // Tuple id resolved in Prepare() to set tuple_desc_;
   const int tuple_id_;
 
+  // Number of null bytes in the tuple.
+  int32_t num_null_bytes_;
+
   // The tuple memory of batch_.
   uint8_t* tuple_mem_;
 
@@ -127,7 +130,13 @@ class ShmScanNode : public ExecNode {
 
   int WriteEmptyTuples(TupleRow* tuple_row, int num_tuples);
 
-  bool WriteCompleteTuple(MemPool* pool, Tuple* tuple, TupleRow* tuple_row, int val);
+  bool WriteCompleteTuple(MemPool* pool, Tuple* tuple, TupleRow* tuple_row, int32_t val);
+
+  // Initialize a tuple.
+  // Assumption - there are no null slots!
+  void InitTuple(Tuple* tuple) {
+    memset(tuple, 0, sizeof(uint8_t) * num_null_bytes_);
+  }
 
   // Commit num_rows to the current row batch.  If this completes the row batch, the
   // row batch is enqueued with the scan node and StartNewRowBatch is called.

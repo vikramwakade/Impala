@@ -214,8 +214,8 @@ void RowBatch::PrintBatch(std::stringstream* stream) {
         k != (*desc)->slots().end(); ++k) {
         if((*k)->is_materialized()) {
           if(k != (*desc)->slots().begin())
-            *stream << ",";
-          *stream << TypeToString((*k)->type()) << ":";
+            *stream << "|";
+          //*stream << TypeToString((*k)->type()) << ":";
           // Get the pointer to the slot in the tuple
           void* value = tuple->GetSlot((*k)->tuple_offset());
           RawValue::PrintValue(value, (*k)->type(), -1, stream);
