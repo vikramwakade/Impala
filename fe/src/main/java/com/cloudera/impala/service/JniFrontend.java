@@ -115,8 +115,8 @@ public class JniFrontend {
     TExecRequest result = frontend_.createExecRequest(queryCxt, explainString);
     LOG.debug(explainString.toString());
 
-    // Vikram
-    System.out.println(explainString.toString() + "**********************************");
+	System.out.println("***********"+explainString.toString());
+
 
     // TODO: avoid creating serializer for each query?
     TSerializer serializer = new TSerializer(protocolFactory_);

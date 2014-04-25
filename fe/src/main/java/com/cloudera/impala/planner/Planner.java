@@ -39,6 +39,7 @@ import com.cloudera.impala.analysis.JoinOperator;
 import com.cloudera.impala.analysis.Predicate;
 import com.cloudera.impala.analysis.QueryStmt;
 import com.cloudera.impala.analysis.SelectStmt;
+import com.cloudera.impala.analysis.MagicStmt;
 import com.cloudera.impala.analysis.SlotDescriptor;
 import com.cloudera.impala.analysis.SlotId;
 import com.cloudera.impala.analysis.SlotRef;
@@ -60,6 +61,8 @@ import com.cloudera.impala.common.NotImplementedException;
 import com.cloudera.impala.common.Pair;
 import com.cloudera.impala.common.PrintUtils;
 import com.cloudera.impala.common.RuntimeEnv;
+import com.cloudera.impala.planner.MagicNode;
+import com.cloudera.impala.planner.PlanNode;
 import com.cloudera.impala.thrift.TExplainLevel;
 import com.cloudera.impala.thrift.TPartitionType;
 import com.cloudera.impala.thrift.TQueryExecRequest;
@@ -68,6 +71,8 @@ import com.google.common.base.Preconditions;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Sets;
+
+
 
 
 /**
@@ -161,7 +166,7 @@ public class Planner {
     rootFragment.setOutputExprs(queryStmt.getBaseTblResultExprs());
 
     LOG.debug("finalize plan fragments");
-    for (PlanFragment fragment: fragments) {
+    for (PlanFragment fragment : fragments) {
       fragment.finalize(analyzer, !queryOptions.allow_unsupported_formats);
     }
 
@@ -179,8 +184,8 @@ public class Planner {
     if (request.isSetPer_host_mem_req() && request.isSetPer_host_vcores()) {
       str.append(
           String.format("Estimated Per-Host Requirements: Memory=%s VCores=%s\n\n",
-          PrintUtils.printBytes(request.getPer_host_mem_req()),
-          request.per_host_vcores));
+              PrintUtils.printBytes(request.getPer_host_mem_req()),
+              request.per_host_vcores));
     }
 
     if (explainLevel.ordinal() < TExplainLevel.VERBOSE.ordinal()) {
@@ -213,18 +218,21 @@ public class Planner {
       long perNodeMemLimit, ArrayList<PlanFragment> fragments)
       throws InternalException, NotImplementedException, AuthorizationException {
     ArrayList<PlanFragment> childFragments = Lists.newArrayList();
-    for (PlanNode child: root.getChildren()) {
+    for (PlanNode child : root.getChildren()) {
       // allow child fragments to be partitioned, unless they contain a limit clause
       // (the result set with the limit constraint needs to be computed centrally);
       // merge later if needed
       boolean childIsPartitioned = !child.hasLimit();
       childFragments.add(
           createPlanFragments(
-            child, analyzer, childIsPartitioned, perNodeMemLimit, fragments));
+              child, analyzer, childIsPartitioned, perNodeMemLimit, fragments));
     }
 
     PlanFragment result = null;
-    if (root instanceof ScanNode) {
+    if (root instanceof MagicNode) {
+      result = createScanFragment(root);
+      fragments.add(result);
+    } else if (root instanceof ScanNode) {
       result = createScanFragment(root);
       fragments.add(result);
     } else if (root instanceof HashJoinNode) {
@@ -270,9 +278,10 @@ public class Planner {
    */
   private long getNumDistinctValues(List<Expr> exprs) {
     long result = 1;
-    for (Expr expr: exprs) {
+    for (Expr expr : exprs) {
       result *= expr.getNumDistinctValues();
-      if (result < 0) return -1;
+      if (result < 0)
+        return -1;
     }
     return result;
   }
@@ -292,8 +301,10 @@ public class Planner {
       throws AuthorizationException, InternalException {
     List<Expr> partitionExprs = insertStmt.getPartitionKeyExprs();
     Boolean partitionHint = insertStmt.isRepartition();
-    if (partitionExprs.isEmpty()) return inputFragment;
-    if (partitionHint != null && !partitionHint) return inputFragment;
+    if (partitionExprs.isEmpty())
+      return inputFragment;
+    if (partitionHint != null && !partitionHint)
+      return inputFragment;
 
     // we ignore constants for the sake of partitioning
     List<Expr> nonConstPartitionExprs = Lists.newArrayList(partitionExprs);
@@ -309,7 +320,8 @@ public class Planner {
     // if it is distributed across all nodes; if so, don't repartition
     if (Expr.isSubset(inputPartition.getPartitionExprs(), nonConstPartitionExprs)) {
       long numPartitions = getNumDistinctValues(inputPartition.getPartitionExprs());
-      if (numPartitions >= inputFragment.getNumNodes()) return inputFragment;
+      if (numPartitions >= inputFragment.getNumNodes())
+        return inputFragment;
     }
 
     // don't repartition if the resulting number of partitions is too low to get good
@@ -430,7 +442,7 @@ public class Planner {
     long partitionCost = Long.MAX_VALUE;
     List<Expr> lhsJoinExprs = Lists.newArrayList();
     List<Expr> rhsJoinExprs = Lists.newArrayList();
-    for (Pair<Expr, Expr> pair: node.getEqJoinConjuncts()) {
+    for (Pair<Expr, Expr> pair : node.getEqJoinConjuncts()) {
       // no remapping necessary
       lhsJoinExprs.add(pair.first.clone(null));
       rhsJoinExprs.add(pair.second.clone(null));
@@ -444,9 +456,9 @@ public class Planner {
           rightChildFragment.getDataPartition().getPartitionExprs());
 
       double lhsCost = (lhsHasCompatPartition) ? 0.0 :
-        Math.round((double) lhsTree.getCardinality() * lhsTree.getAvgRowSize());
+          Math.round((double) lhsTree.getCardinality() * lhsTree.getAvgRowSize());
       double rhsCost = (rhsHasCompatPartition) ? 0.0 :
-        Math.round((double) rhsTree.getCardinality() * rhsTree.getAvgRowSize());
+          Math.round((double) rhsTree.getCardinality() * rhsTree.getAvgRowSize());
       partitionCost = Math.round(lhsCost + rhsCost);
     }
     LOG.debug("partition: cost=" + Long.toString(partitionCost));
@@ -461,18 +473,18 @@ public class Planner {
     // - we're explicitly told to do so
     // - or if it's cheaper and we weren't explicitly told to do a partitioned join
     // - and we're not doing a full or right outer join (those require the left-hand
-    //   side to be partitioned for correctness)
+    // side to be partitioned for correctness)
     // - and the expected size of the hash tbl doesn't exceed perNodeMemLimit
     // we do a "<=" comparison of the costs so that we default to broadcast joins if
     // we're unable to estimate the cost
     if (node.getJoinOp() != JoinOperator.RIGHT_OUTER_JOIN
         && node.getJoinOp() != JoinOperator.FULL_OUTER_JOIN
         && (perNodeMemLimit == 0
-            || Math.round((double) rhsDataSize * HASH_TBL_SPACE_OVERHEAD)
-                <= perNodeMemLimit)
+        || Math.round((double) rhsDataSize * HASH_TBL_SPACE_OVERHEAD)
+        <= perNodeMemLimit)
         && (node.getInnerRef().isBroadcastJoin()
-            || (!node.getInnerRef().isPartitionedJoin()
-                && broadcastCost <= partitionCost))) {
+        || (!node.getInnerRef().isPartitionedJoin()
+        && broadcastCost <= partitionCost))) {
       doBroadcast = true;
     } else {
       doBroadcast = false;
@@ -502,7 +514,7 @@ public class Planner {
         node.setChild(0, leftChildFragment.getPlanRoot());
         node.setChild(1, rightChildFragment.getPlanRoot());
         // Redirect fragments sending to rightFragment to leftFragment.
-        for (PlanFragment fragment: fragments) {
+        for (PlanFragment fragment : fragments) {
           if (fragment.getDestFragment() == rightChildFragment) {
             fragment.setDestination(fragment.getDestNode());
           }
@@ -719,7 +731,7 @@ public class Planner {
     // 2nd phase of DISTINCT aggregation
     boolean isDistinct =
         node.getChild(0) instanceof AggregationNode
-          && ((AggregationNode)(node.getChild(0))).getAggInfo().isDistinctAgg();
+            && ((AggregationNode) (node.getChild(0))).getAggInfo().isDistinctAgg();
 
     if (!isDistinct) {
       // the original aggregation goes into the child fragment,
@@ -752,8 +764,8 @@ public class Planner {
           createParentAggFragment(analyzer, childFragment, parentPartition);
       AggregationNode mergeAggNode =
           new AggregationNode(
-            nodeIdGenerator_.getNextId(), mergeFragment.getPlanRoot(),
-            node.getAggInfo().getMergeAggInfo());
+              nodeIdGenerator_.getNextId(), mergeFragment.getPlanRoot(),
+              node.getAggInfo().getMergeAggInfo());
       mergeAggNode.init(analyzer);
       mergeAggNode.setLimit(limit);
 
@@ -777,10 +789,10 @@ public class Planner {
     if (hasGrouping) {
       // We need to do
       // - child fragment:
-      //   * phase-1 aggregation
+      // * phase-1 aggregation
       // - merge fragment, hash-partitioned on grouping exprs:
-      //   * merge agg of phase 1
-      //   * phase 2 agg
+      // * merge agg of phase 1
+      // * phase 2 agg
       // The output partition exprs of the child are the (input) grouping exprs
       // of the parent.
       List<Expr> partitionExprs = Expr.cloneList(groupingExprs, null);
@@ -789,17 +801,17 @@ public class Planner {
     } else {
       // We need to do
       // - child fragment:
-      //   * phase-1 aggregation
+      // * phase-1 aggregation
       // - merge fragment 1, hash-partitioned on distinct exprs:
-      //   * merge agg of phase 1
-      //   * phase 2 agg
+      // * merge agg of phase 1
+      // * phase 2 agg
       // - merge fragment 2, unpartitioned:
-      //   * merge agg of phase 2
+      // * merge agg of phase 2
       List<Expr> distinctExprs =
-          ((AggregationNode)(node.getChild(0))).getAggInfo().getGroupingExprs();
+          ((AggregationNode) (node.getChild(0))).getAggInfo().getGroupingExprs();
       List<Expr> partitionExprs =
           Expr.cloneList(
-            distinctExprs, ((AggregationNode)(node.getChild(0))).getAggInfo().getSMap());
+              distinctExprs, ((AggregationNode) (node.getChild(0))).getAggInfo().getSMap());
       mergePartition =
           new DataPartition(TPartitionType.HASH_PARTITIONED, partitionExprs);
     }
@@ -807,7 +819,7 @@ public class Planner {
     // place a merge aggregation step for the 1st phase in a new fragment
     PlanFragment mergeFragment = createParentAggFragment(analyzer, childFragment, mergePartition);
     AggregateInfo mergeAggInfo =
-        ((AggregationNode)(node.getChild(0))).getAggInfo().getMergeAggInfo();
+        ((AggregationNode) (node.getChild(0))).getAggInfo().getMergeAggInfo();
     AggregationNode mergeAggNode =
         new AggregationNode(
             nodeIdGenerator_.getNextId(), node.getChild(0), mergeAggInfo);
@@ -830,7 +842,7 @@ public class Planner {
       mergeAggInfo = node.getAggInfo().getMergeAggInfo();
       mergeAggNode =
           new AggregationNode(
-            nodeIdGenerator_.getNextId(), node.getChild(0), mergeAggInfo);
+              nodeIdGenerator_.getNextId(), node.getChild(0), mergeAggInfo);
       mergeAggNode.init(analyzer);
       mergeFragment.addPlanRoot(mergeAggNode);
     }
@@ -844,7 +856,7 @@ public class Planner {
    * Returns a fragment that outputs the result of 'node'.
    * - adds the top-n computation to the child fragment
    * - if the child fragment is partitioned creates a new unpartitioned fragment that
-   *   merges the output of the child and does another top-n computation
+   * merges the output of the child and does another top-n computation
    */
   private PlanFragment createTopnFragment(SortNode node,
       PlanFragment childFragment, ArrayList<PlanFragment> fragments, Analyzer analyzer)
@@ -893,9 +905,15 @@ public class Planner {
   private PlanNode createQueryPlan(
       QueryStmt stmt, Analyzer analyzer, long defaultOrderByLimit)
       throws ImpalaException {
-    if (stmt instanceof SelectStmt) {
+
+    Class cls = stmt.getClass();
+    System.out.println("***Inside createQueryPlan, stmt = "+cls.getName()+"***\n");
+    if (stmt instanceof MagicStmt) {
+      return createMagicPlan((MagicStmt) stmt, analyzer, defaultOrderByLimit);
+    }else if (stmt instanceof SelectStmt) {
       return createSelectPlan((SelectStmt) stmt, analyzer, defaultOrderByLimit);
-    } else {
+    }
+    else {
       Preconditions.checkState(stmt instanceof UnionStmt);
       return createUnionPlan(analyzer, (UnionStmt) stmt);
     }
@@ -911,8 +929,9 @@ public class Planner {
     Preconditions.checkNotNull(root);
     // TODO: standardize on logical tuple ids?
     List<Expr> conjuncts = analyzer.getUnassignedConjuncts(root);
-    //List<Expr> conjuncts_ = analyzer.getUnassignedConjuncts(tupleIds_);
-    if (conjuncts.isEmpty()) return root;
+    // List<Expr> conjuncts_ = analyzer.getUnassignedConjuncts(tupleIds_);
+    if (conjuncts.isEmpty())
+      return root;
     // evaluate conjuncts_ in SelectNode
     SelectNode selectNode = new SelectNode(nodeIdGenerator_.getNextId(), root);
     // init() picks up the unassigned conjuncts_
@@ -926,9 +945,9 @@ public class Planner {
    * refPlans; for this plan:
    * - the plan is executable, ie, all non-cross joins have equi-join predicates
    * - the leftmost scan is over the largest of the inputs for which we can still
-   *   construct an executable plan
+   * construct an executable plan
    * - all rhs's are in decreasing order of selectiveness (percentage of rows they
-   *   eliminate)
+   * eliminate)
    * Returns null if we can't create an executable plan.
    */
   private PlanNode createCheapestJoinPlan(
@@ -938,7 +957,7 @@ public class Planner {
     // collect eligible candidates for the leftmost input; list contains
     // (plan, materialized size)
     ArrayList<Pair<TableRef, Long>> candidates = Lists.newArrayList();
-    for (Pair<TableRef, PlanNode> entry: refPlans) {
+    for (Pair<TableRef, PlanNode> entry : refPlans) {
       TableRef ref = entry.first;
       JoinOperator joinOp = ref.getJoinOp();
       if (joinOp == JoinOperator.LEFT_OUTER_JOIN
@@ -966,7 +985,8 @@ public class Planner {
       candidates.add(new Pair(ref, new Long(materializedSize)));
       LOG.trace("candidate " + ref.getAlias() + Long.toString(materializedSize));
     }
-    if (candidates.isEmpty()) return null;
+    if (candidates.isEmpty())
+      return null;
 
     // order candidates by descending materialized size; we want to minimize the memory
     // consumption of the materialized hash tables required for the join sequence
@@ -977,9 +997,10 @@ public class Planner {
             return (diff < 0 ? -1 : (diff > 0 ? 1 : 0));
           }
         });
-    for (Pair<TableRef, Long> candidate: candidates) {
+    for (Pair<TableRef, Long> candidate : candidates) {
       PlanNode result = createJoinPlan(analyzer, candidate.first, refPlans);
-      if (result != null) return result;
+      if (result != null)
+        return result;
     }
     return null;
   }
@@ -994,8 +1015,8 @@ public class Planner {
     LOG.trace("createJoinPlan: " + leftmostRef.getAlias());
     // the refs that have yet to be joined
     List<Pair<TableRef, PlanNode>> remainingRefs = Lists.newArrayList();
-    PlanNode root = null;  // root of accumulated join plan
-    for (Pair<TableRef, PlanNode> entry: refPlans) {
+    PlanNode root = null; // root of accumulated join plan
+    for (Pair<TableRef, PlanNode> entry : refPlans) {
       if (entry.first == leftmostRef) {
         root = entry.second;
       } else {
@@ -1015,7 +1036,7 @@ public class Planner {
       // which minimizes the total number of hash table lookups
       PlanNode newRoot = null;
       Pair<TableRef, PlanNode> minEntry = null;
-      for (Pair<TableRef, PlanNode> entry: remainingRefs) {
+      for (Pair<TableRef, PlanNode> entry : remainingRefs) {
         TableRef ref = entry.first;
         LOG.trace(Integer.toString(i) + " considering ref " + ref.getAlias());
 
@@ -1031,22 +1052,26 @@ public class Planner {
           // available in order to evaluate the entire On clause
           // TODO: make this less restrictive by considering plans with inverted Outer
           // Join directions
-          if (!currentTids.containsAll(ref.getOnClauseTupleIds())) continue;
+          if (!currentTids.containsAll(ref.getOnClauseTupleIds()))
+            continue;
         } else if (ref.getJoinOp() == JoinOperator.CROSS_JOIN) {
-          if (!joinedRefs.contains(ref.getLeftTblRef())) continue;
+          if (!joinedRefs.contains(ref.getLeftTblRef()))
+            continue;
         }
 
         PlanNode rhsPlan = entry.second;
         analyzer.setAssignedConjuncts(root.getAssignedConjuncts());
         PlanNode candidate = createJoinNode(analyzer, root, rhsPlan, ref, false);
-        if (candidate == null) continue;
+        if (candidate == null)
+          continue;
         LOG.trace("cardinality_=" + Long.toString(candidate.getCardinality()));
         if (newRoot == null || candidate.getCardinality() < newRoot.getCardinality()) {
           newRoot = candidate;
           minEntry = entry;
         }
       }
-      if (newRoot == null) return null;
+      if (newRoot == null)
+        return null;
 
       // we need to insert every rhs row into the hash table and then look up
       // every lhs row
@@ -1094,10 +1119,103 @@ public class Planner {
   }
 
   /**
+   *
+   * @param magicStmt
+   * @param analyzer
+   * @param defaultOrderByLimit
+   * @return
+   * @throws ImpalaException
+   */
+  private PlanNode createMagicPlan(
+      MagicStmt magicStmt, Analyzer analyzer, long defaultOrderByLimit)
+      throws ImpalaException {
+
+    if (magicStmt.getTableRefs().isEmpty()) {
+        return createConstantMagicPlan(magicStmt, analyzer);
+      }
+    
+    ArrayList<TupleId> rowTuples = Lists.newArrayList();
+    for (TableRef tblRef : magicStmt.getTableRefs()) {
+      rowTuples.addAll(tblRef.getMaterializedTupleIds());
+    }
+    
+    magicStmt.materializeRequiredSlots(analyzer);
+    
+    List<Pair<TableRef, PlanNode>> refPlans = Lists.newArrayList();
+    for (TableRef ref : magicStmt.getTableRefs()) {
+      PlanNode plan = createMagicTableRefNode(analyzer, ref);
+      Preconditions.checkState(plan != null);
+      refPlans.add(new Pair(ref, plan));
+    }
+    
+    for (Pair<TableRef, PlanNode> entry : refPlans) {
+      entry.second.setAssignedConjuncts(analyzer.getAssignedConjuncts());
+    }
+
+    PlanNode root = null;
+    if (!magicStmt.getSelectList().isStraightJoin()) {
+      root = createCheapestJoinPlan(analyzer, refPlans);
+    }
+    if (magicStmt.getSelectList().isStraightJoin() || root == null) {
+      // we didn't have enough stats to do a cost-based join plan, or the STRAIGHT_JOIN
+      // keyword was in the select list: use the FROM clause order instead
+      root = createFromClauseJoinPlan(analyzer, refPlans);
+      Preconditions.checkNotNull(root);
+    }
+    
+    if (magicStmt.getSortInfo() != null
+        && magicStmt.getLimit() == -1 && defaultOrderByLimit == -1) {
+      // TODO: only use topN if the memory footprint is expected to be low;
+      // how to account for strings?
+      throw new NotImplementedException(
+          "ORDER BY without LIMIT currently not supported");
+    }
+
+    if (root != null) {
+      // add unassigned conjuncts_ before aggregation
+      // (scenario: agg input comes from an inline view which wasn't able to
+      // evaluate all Where clause conjuncts_ from this scope)
+      root = addUnassignedConjuncts(analyzer, root.getTupleIds(), root);
+    }
+
+    // add aggregation, if required
+    AggregateInfo aggInfo = magicStmt.getAggInfo();
+    if (aggInfo != null) {
+      root = new AggregationNode(nodeIdGenerator_.getNextId(), root, aggInfo);
+      root.init(analyzer);
+      Preconditions.checkState(root.hasValidStats());
+      // if we're computing DISTINCT agg fns, the analyzer already created the
+      // 2nd phase agginfo
+      if (aggInfo.isDistinctAgg()) {
+        ((AggregationNode) root).unsetNeedsFinalize();
+        root = new AggregationNode(
+            nodeIdGenerator_.getNextId(), root,
+            aggInfo.getSecondPhaseDistinctAggInfo());
+        root.init(analyzer);
+        Preconditions.checkState(root.hasValidStats());
+      }
+      // add Having clause
+      root.assignConjuncts(analyzer);
+    }
+
+    root = addOrderByLimit(
+        analyzer, root, magicStmt.getSortInfo(), magicStmt.getLimit(),
+        defaultOrderByLimit, magicStmt.getOffset());
+
+    // All the conjuncts_ should be assigned at this point.
+    // Preconditions.checkState(!analyzer.hasUnassignedConjuncts());
+
+    return root;
+    
+  }
+
+  /**
    * Create tree of PlanNodes that implements the Select/Project/Join/Group by/Having
    * of the selectStmt query block.
-   * @throws NotImplementedException if selectStmt contains Order By clause w/o Limit
-   *   and the query options don't contain a default limit
+   *
+   * @throws NotImplementedException
+   *           if selectStmt contains Order By clause w/o Limit
+   *           and the query options don't contain a default limit
    */
   private PlanNode createSelectPlan(
       SelectStmt selectStmt, Analyzer analyzer, long defaultOrderByLimit)
@@ -1110,7 +1228,7 @@ public class Planner {
     // collect ids of tuples materialized by the subtree that includes all joins
     // and scans
     ArrayList<TupleId> rowTuples = Lists.newArrayList();
-    for (TableRef tblRef: selectStmt.getTableRefs()) {
+    for (TableRef tblRef : selectStmt.getTableRefs()) {
       rowTuples.addAll(tblRef.getMaterializedTupleIds());
     }
 
@@ -1122,23 +1240,23 @@ public class Planner {
     //
     // For non-join predicates, slots are marked as follows:
     // - for base table scan predicates, this is done directly by ScanNode.init(), which
-    //   can do a better job because it doesn't need to materialize slots that are only
-    //   referenced for partition pruning, for instance
+    // can do a better job because it doesn't need to materialize slots that are only
+    // referenced for partition pruning, for instance
     // - for inline views, non-join predicates are pushed down, at which point the process
-    //   repeats itself.
+    // repeats itself.
     selectStmt.materializeRequiredSlots(analyzer);
 
     // create plans for our table refs; use a list here instead of a map to
     // maintain a deterministic order of traversing the TableRefs during join
     // plan generation (helps with tests)
     List<Pair<TableRef, PlanNode>> refPlans = Lists.newArrayList();
-    for (TableRef ref: selectStmt.getTableRefs()) {
+    for (TableRef ref : selectStmt.getTableRefs()) {
       PlanNode plan = createTableRefNode(analyzer, ref);
       Preconditions.checkState(plan != null);
       refPlans.add(new Pair(ref, plan));
     }
     // save state of conjunct assignment; needed for join plan generation
-    for (Pair<TableRef, PlanNode> entry: refPlans) {
+    for (Pair<TableRef, PlanNode> entry : refPlans) {
       entry.second.setAssignedConjuncts(analyzer.getAssignedConjuncts());
     }
 
@@ -1177,7 +1295,7 @@ public class Planner {
       // if we're computing DISTINCT agg fns, the analyzer already created the
       // 2nd phase agginfo
       if (aggInfo.isDistinctAgg()) {
-        ((AggregationNode)root).unsetNeedsFinalize();
+        ((AggregationNode) root).unsetNeedsFinalize();
         root = new AggregationNode(
             nodeIdGenerator_.getNextId(), root,
             aggInfo.getSecondPhaseDistinctAggInfo());
@@ -1193,7 +1311,7 @@ public class Planner {
         defaultOrderByLimit, selectStmt.getOffset());
 
     // All the conjuncts_ should be assigned at this point.
-    //Preconditions.checkState(!analyzer.hasUnassignedConjuncts());
+    // Preconditions.checkState(!analyzer.hasUnassignedConjuncts());
 
     return root;
   }
@@ -1221,9 +1339,9 @@ public class Planner {
   }
 
   /**
-  * Returns a MergeNode that materializes the exprs of the constant selectStmt.
-  * Replaces the resultExprs of the selectStmt with SlotRefs into the materialized tuple.
-  */
+   * Returns a MergeNode that materializes the exprs of the constant selectStmt.
+   * Replaces the resultExprs of the selectStmt with SlotRefs into the materialized tuple.
+   */
   private PlanNode createConstantSelectPlan(SelectStmt selectStmt, Analyzer analyzer)
       throws InternalException {
     Preconditions.checkState(selectStmt.getTableRefs().isEmpty());
@@ -1252,6 +1370,36 @@ public class Planner {
     return mergeNode;
   }
 
+  private PlanNode createConstantMagicPlan(MagicStmt magicStmt, Analyzer analyzer)
+      throws InternalException, AuthorizationException {
+//    Preconditions.checkState(selectStmt.getTableRefs().isEmpty());
+    /*ArrayList<Expr> resultExprs = magicStmt.getBaseTblResultExprs();
+    ArrayList<String> colLabels = magicStmt.getColLabels();
+    // Create tuple descriptor for materialized tuple.
+    TupleDescriptor tupleDesc = analyzer.getDescTbl().createTupleDescriptor();
+    tupleDesc.setIsMaterialized(true);
+    MagicNode magicNode = new MagicNode(nodeIdGenerator_.getNextId(), tblRef.getDesc(),
+          (HdfsTable) tblRef.getTable());
+    // Analysis guarantees that selects without a FROM clause only have constant exprs.
+    magicNode.addConstExprList(Lists.newArrayList(resultExprs));
+
+    // Replace the select stmt's resultExprs with SlotRefs into tupleDesc.
+    for (int i = 0; i < resultExprs.size(); ++i) {
+      SlotDescriptor slotDesc = analyzer.addSlotDescriptor(tupleDesc);
+      slotDesc.setLabel(colLabels.get(i));
+      slotDesc.setType(resultExprs.get(i).getType());
+      slotDesc.setStats(ColumnStats.fromExpr(resultExprs.get(i)));
+      slotDesc.setIsMaterialized(true);
+      SlotRef slotRef = new SlotRef(slotDesc);
+      resultExprs.set(i, slotRef);
+    }
+    tupleDesc.computeMemLayout();
+    // MergeNode.init() needs tupleDesc to have been initialized
+    magicNode.init(analyzer);
+    return magicNode;*/
+    return null;
+  }
+
   /**
    * Transform '=', '<[=]' and '>[=]' comparisons for given slot into
    * ValueRange. Also removes those predicates which were used for the construction
@@ -1267,9 +1415,11 @@ public class Planner {
     ValueRange result = null;
     while (i.hasNext()) {
       Expr e = i.next();
-      if (!(e instanceof BinaryPredicate)) continue;
+      if (!(e instanceof BinaryPredicate))
+        continue;
       BinaryPredicate comp = (BinaryPredicate) e;
-      if (comp.getOp() == BinaryPredicate.Operator.NE) continue;
+      if (comp.getOp() == BinaryPredicate.Operator.NE)
+        continue;
       Expr slotBinding = comp.getSlotBinding(d.getId());
       if (slotBinding == null || !slotBinding.isConstant() ||
           !slotBinding.getType().equals(ColumnType.STRING)) {
@@ -1281,7 +1431,8 @@ public class Planner {
         return ValueRange.createEqRange(slotBinding);
       }
 
-      if (result == null) result = new ValueRange();
+      if (result == null)
+        result = new ValueRange();
 
       // TODO: do we need copies here?
       if (comp.getOp() == BinaryPredicate.Operator.GT
@@ -1305,14 +1456,14 @@ public class Planner {
   /**
    * Returns plan tree for an inline view ref:
    * - predicates from the enclosing scope that can be evaluated directly within
-   *   the inline-view plan are pushed down
+   * the inline-view plan are pushed down
    * - predicates that cannot be evaluated directly within the inline-view plan
-   *   but only apply to the inline view are evaluated in a SelectNode placed
-   *   on top of the inline view plan
+   * but only apply to the inline view are evaluated in a SelectNode placed
+   * on top of the inline view plan
    * - all slots that are referenced by predicates from the enclosing scope that cannot
-   *   be pushed down are marked as materialized (so that when computeMemLayout() is called
-   *   on the base table descriptors materialized by the inline view it has a complete
-   *   picture)
+   * be pushed down are marked as materialized (so that when computeMemLayout() is called
+   * on the base table descriptors materialized by the inline view it has a complete
+   * picture)
    */
   private PlanNode createInlineViewPlan(Analyzer analyzer, InlineViewRef inlineViewRef)
       throws ImpalaException {
@@ -1329,8 +1480,9 @@ public class Planner {
     if (!inlineViewRef.getViewStmt().hasLimitClause()) {
       // check if we can evaluate them
       List<Expr> preds = Lists.newArrayList();
-      for (Expr e: unassigned) {
-        if (analyzer.canEvalPredicate(inlineViewRef.getId().asList(), e)) preds.add(e);
+      for (Expr e : unassigned) {
+        if (analyzer.canEvalPredicate(inlineViewRef.getId().asList(), e))
+          preds.add(e);
       }
       unassigned.removeAll(preds);
       // create new predicates against the inline view's unresolved result exprs, not
@@ -1394,7 +1546,7 @@ public class Planner {
     ScanNode scanNode = null;
     if (tblRef.getTable() instanceof HdfsTable) {
       scanNode = new HdfsScanNode(nodeIdGenerator_.getNextId(), tblRef.getDesc(),
-          (HdfsTable)tblRef.getTable());
+          (HdfsTable) tblRef.getTable());
       scanNode.init(analyzer);
       return scanNode;
     } else {
@@ -1425,19 +1577,34 @@ public class Planner {
       }
     }
 
-    ((HBaseScanNode)scanNode).setKeyRanges(keyRanges);
+    ((HBaseScanNode) scanNode).setKeyRanges(keyRanges);
     scanNode.addConjuncts(conjuncts);
     scanNode.init(analyzer);
 
     return scanNode;
   }
 
+  private PlanNode createMagicNode(Analyzer analyzer, TableRef tblRef)
+      throws InternalException, AuthorizationException {
+    MagicNode magicNode = null;
+ //   if (tblRef.getTable() instanceof HdfsTable) {
+
+      TupleDescriptor tupleDesc = analyzer.getDescTbl().createTupleDescriptor();
+
+      magicNode = new MagicNode(nodeIdGenerator_.getNextId(), tblRef.getDesc(),
+          (HdfsTable) tblRef.getTable());
+      //magicNode.init(analyzer);
+      magicNode.init(analyzer);
+      return magicNode;
+  //  }
+  }
+
   /**
    * Return join conjuncts_ that can be used for hash table lookups.
    * - for inner joins, those are equi-join predicates in which one side is fully bound
-   *   by lhsIds and the other by rhs' id_;
+   * by lhsIds and the other by rhs' id_;
    * - for outer joins: same type of conjuncts_ as inner joins, but only from the JOIN
-   *   clause
+   * clause
    * Returns the conjuncts_ in 'joinConjuncts' (in which "<lhs> = <rhs>" is returned
    * as Pair(<lhs>, <rhs>)) and also in their original form in 'joinPredicates'.
    * If no conjuncts_ are found, constructs them based on equivalence classes, where
@@ -1461,14 +1628,16 @@ public class Planner {
     } else {
       candidates = analyzer.getEqJoinConjuncts(rhsId, null);
     }
-    if (candidates == null) return;
+    if (candidates == null)
+      return;
 
     // equivalence classes of eq predicates in joinPredicates
     Set<EquivalenceClassId> joinEquivClasses = Sets.newHashSet();
 
-    for (Expr e: candidates) {
+    for (Expr e : candidates) {
       // Ignore predicate if one of its children is a constant.
-      if (e.getChild(0).isConstant() || e.getChild(1).isConstant()) continue;
+      if (e.getChild(0).isConstant() || e.getChild(1).isConstant())
+        continue;
 
       Expr rhsExpr = null;
       if (e.getChild(0).isBoundByTupleIds(rhsIds)) {
@@ -1512,12 +1681,13 @@ public class Planner {
       Pair<Expr, Expr> entry = Pair.create(lhsExpr, rhsExpr);
       joinConjuncts.add(entry);
     }
-    if (!joinPredicates.isEmpty()) return;
+    if (!joinPredicates.isEmpty())
+      return;
     Preconditions.checkState(joinConjuncts.isEmpty());
 
     // construct joinConjunct entries derived from equivalence class membership
     List<SlotId> lhsSlotIds = Lists.newArrayList();
-    for (SlotDescriptor slotDesc: rhs.getDesc().getSlots()) {
+    for (SlotDescriptor slotDesc : rhs.getDesc().getSlots()) {
       analyzer.getEquivSlots(slotDesc.getId(), lhsIds, lhsSlotIds);
       if (!lhsSlotIds.isEmpty()) {
         SlotId lhsSlotId = lhsSlotIds.get(0);
@@ -1530,7 +1700,7 @@ public class Planner {
         // analyze() creates casts, if needed
         try {
           pred.analyze(analyzer);
-        } catch(AnalysisException e) {
+        } catch (AnalysisException e) {
           throw new IllegalStateException(
               "constructed predicate failed analysis: " + pred.toSql());
         }
@@ -1560,12 +1730,13 @@ public class Planner {
     getHashLookupJoinConjuncts(
         analyzer, outer.getTblRefIds(), innerRef, eqJoinConjuncts, eqJoinPredicates);
     if (eqJoinConjuncts.isEmpty()) {
-      if (!throwOnError) return null;
+      if (!throwOnError)
+        return null;
       throw new NotImplementedException(
           String.format(
-            "Join with '%s' requires at least one conjunctive equality predicate. To " +
-            "perform a Cartesian product between two tables, use a CROSS JOIN.",
-            innerRef.getAliasAsName()));
+              "Join with '%s' requires at least one conjunctive equality predicate. To " +
+                  "perform a Cartesian product between two tables, use a CROSS JOIN.",
+              innerRef.getAliasAsName()));
     }
     analyzer.markConjunctsAssigned(eqJoinPredicates);
 
@@ -1601,6 +1772,17 @@ public class Planner {
     throw new InternalException("unknown TableRef node");
   }
 
+  private PlanNode createMagicTableRefNode(Analyzer analyzer, TableRef tblRef)
+      throws ImpalaException {
+    if (tblRef instanceof BaseTableRef) {
+      return createMagicNode(analyzer, tblRef);
+    }
+    if (tblRef instanceof InlineViewRef) {
+      return createInlineViewPlan(analyzer, (InlineViewRef) tblRef);
+    }
+    throw new InternalException("unknown TableRef node");
+  }
+
   /**
    * Create a plan tree corresponding to 'unionOperands' for the given unionStmt.
    * The individual operands' plan trees are attached to a single MergeNode.
@@ -1610,7 +1792,7 @@ public class Planner {
       throws ImpalaException {
     MergeNode mergeNode =
         new MergeNode(nodeIdGenerator_.getNextId(), unionStmt.getTupleId());
-    for (UnionOperand op: unionOperands) {
+    for (UnionOperand op : unionOperands) {
       QueryStmt queryStmt = op.getQueryStmt();
       if (queryStmt instanceof SelectStmt) {
         SelectStmt selectStmt = (SelectStmt) queryStmt;
@@ -1627,7 +1809,8 @@ public class Planner {
   }
 
   private boolean isConstantSelect(QueryStmt queryStmt) {
-    if (!(queryStmt instanceof SelectStmt)) return false;
+    if (!(queryStmt instanceof SelectStmt))
+      return false;
     SelectStmt stmt = (SelectStmt) queryStmt;
     return stmt.getTableRefs().isEmpty();
   }
@@ -1652,9 +1835,9 @@ public class Planner {
   /**
    * Returns plan tree for unionStmt:
    * - distinctOperands' plan trees are collected in a single MergeNode
-   *   and duplicates removed via distinct aggregation
+   * and duplicates removed via distinct aggregation
    * - the output of that plus the allOperands' plan trees are collected in
-   *   another MergeNode which materializes the result of unionStmt
+   * another MergeNode which materializes the result of unionStmt
    */
   private PlanNode createUnionPlan(Analyzer analyzer, UnionStmt unionStmt)
       throws ImpalaException {
@@ -1667,7 +1850,7 @@ public class Planner {
     List<Expr> conjuncts =
         analyzer.getUnassignedConjuncts(unionStmt.getTupleId().asList(), false);
     boolean markAssigned = true;
-    for (UnionOperand op: unionStmt.getOperands()) {
+    for (UnionOperand op : unionStmt.getOperands()) {
       if (isConstantSelect(op.getQueryStmt())) {
         // if we have constant selects, the MergeNode needs to evaluate
         // all conjuncts_ as well
@@ -1688,7 +1871,8 @@ public class Planner {
       }
       analyzer.registerConjuncts(opConjuncts);
     }
-    if (markAssigned) analyzer.markConjunctsAssigned(conjuncts);
+    if (markAssigned)
+      analyzer.markConjunctsAssigned(conjuncts);
 
     // mark slots after predicate propagation but prior to plan tree generation
     unionStmt.materializeRequiredSlots(analyzer);
@@ -1706,7 +1890,8 @@ public class Planner {
       MergeNode allMerge =
           createUnionMergePlan(analyzer, unionStmt, unionStmt.getAllOperands());
       // for unionStmt, baseTblResultExprs = resultExprs
-      if (result != null) allMerge.addChild(result, unionStmt.getResultExprs());
+      if (result != null)
+        allMerge.addChild(result, unionStmt.getResultExprs());
       result = allMerge;
     }
 
@@ -1776,7 +1961,8 @@ public class Planner {
       for (int i = 0; i < planNodes.size(); ++i) {
         PlanNode node = planNodes.get(i);
         PlanFragment fragment = node.getFragment();
-        if (!fragment.isPartitioned() && excludeUnpartitionedFragments) continue;
+        if (!fragment.isPartitioned() && excludeUnpartitionedFragments)
+          continue;
         node.computeCosts(queryOptions);
         uniqueFragments.add(fragment);
         if (node.getPerHostMemCost() < 0) {
@@ -1805,7 +1991,8 @@ public class Planner {
       for (int i = 0; i < dataSinks.size(); ++i) {
         DataSink sink = dataSinks.get(i);
         PlanFragment fragment = sink.getFragment();
-        if (!fragment.isPartitioned() && excludeUnpartitionedFragments) continue;
+        if (!fragment.isPartitioned() && excludeUnpartitionedFragments)
+          continue;
         // Sanity check that this plan-node set has at least one PlanNode of fragment.
         Preconditions.checkState(uniqueFragments.contains(fragment));
         sink.computeCosts();
@@ -1833,8 +2020,13 @@ public class Planner {
       return false;
     }
 
-    public long getPerHostMem() { return perHostMem; }
-    public int getPerHostVcores() { return perHostVcores; }
+    public long getPerHostMem() {
+      return perHostMem;
+    }
+
+    public int getPerHostVcores() {
+      return perHostVcores;
+    }
   }
 
   /**
@@ -1853,8 +2045,9 @@ public class Planner {
     // Maps from an ExchangeNode's PlanNodeId to the fragments feeding it.
     // TODO: This mapping is not necessary anymore. Remove it and clean up.
     Map<PlanNodeId, List<PlanFragment>> exchangeSources = Maps.newHashMap();
-    for (PlanFragment fragment: fragments) {
-      if (fragment.getDestNode() == null) continue;
+    for (PlanFragment fragment : fragments) {
+      if (fragment.getDestNode() == null)
+        continue;
       List<PlanFragment> srcFragments =
           exchangeSources.get(fragment.getDestNode().getId());
       if (srcFragments == null) {
@@ -1874,15 +2067,17 @@ public class Planner {
     // Note that the max mem and vcores may come from different plan node sets.
     long maxPerHostMem = Long.MIN_VALUE;
     int maxPerHostVcores = Integer.MIN_VALUE;
-    for (PipelinedPlanNodeSet planNodeSet: planNodeSets) {
+    for (PipelinedPlanNodeSet planNodeSet : planNodeSets) {
       if (!planNodeSet.computeResourceEstimates(
           excludeUnpartitionedFragments, queryOptions)) {
         continue;
       }
       long perHostMem = planNodeSet.getPerHostMem();
       int perHostVcores = planNodeSet.getPerHostVcores();
-      if (perHostMem > maxPerHostMem) maxPerHostMem = perHostMem;
-      if (perHostVcores > maxPerHostVcores) maxPerHostVcores = perHostVcores;
+      if (perHostMem > maxPerHostMem)
+        maxPerHostMem = perHostMem;
+      if (perHostVcores > maxPerHostVcores)
+        maxPerHostVcores = perHostVcores;
     }
 
     // Do not ask for more cores than are in the RuntimeEnv.
@@ -1892,7 +2087,7 @@ public class Planner {
     // and excludeUnpartitionedFragments is true.
     if (maxPerHostMem == Long.MIN_VALUE || maxPerHostVcores == Integer.MIN_VALUE) {
       boolean allUnpartitioned = true;
-      for (PlanFragment fragment: fragments) {
+      for (PlanFragment fragment : fragments) {
         if (fragment.isPartitioned()) {
           allUnpartitioned = false;
           break;
@@ -1957,7 +2152,7 @@ public class Planner {
       // Assume that all feeding fragments execute concurrently.
       List<PlanFragment> srcFragments = exchangeSources.get(node.getId());
       Preconditions.checkNotNull(srcFragments);
-      for (PlanFragment srcFragment: srcFragments) {
+      for (PlanFragment srcFragment : srcFragments) {
         computePlanNodeSets(srcFragment.getPlanRoot(), exchangeSources, lhsSet, null,
             planNodeSets);
       }
@@ -1978,8 +2173,9 @@ public class Planner {
     // Assume that non-join, non-blocking nodes with multiple children (e.g., MergeNode)
     // consume their inputs in an arbitrary order (i.e., all child subtrees execute
     // concurrently).
-    for (PlanNode child: node.getChildren()) {
+    for (PlanNode child : node.getChildren()) {
       computePlanNodeSets(child, exchangeSources, lhsSet, rhsSet, planNodeSets);
     }
   }
 }
+

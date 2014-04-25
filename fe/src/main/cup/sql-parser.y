@@ -210,7 +210,7 @@ terminal
   KW_GROUP, KW_GROUP_CONCAT, KW_HAVING, KW_IF, KW_IN, KW_INIT_FN, KW_INNER,
   KW_INPATH, KW_INSERT, KW_INT, KW_INTERMEDIATE, KW_INTERVAL, KW_INTO,
   KW_INVALIDATE, KW_IS, KW_JOIN, KW_LAST, KW_LEFT, KW_LIKE, KW_LIMIT,
-  KW_LINES, KW_LOAD, KW_LOCATION, KW_MAX, KW_MERGE_FN, KW_METADATA, KW_MIN, KW_NDV,
+  KW_LINES, KW_LOAD, KW_LOCATION, KW_MAGIC, KW_MAX, KW_MERGE_FN, KW_METADATA, KW_MIN, KW_NDV,
   KW_NOT, KW_NULL, KW_NULLS, KW_OFFSET, KW_ON, KW_OR, KW_ORDER, KW_OUTER, KW_OVERWRITE,
   KW_PARQUET, KW_PARQUETFILE, KW_PARTITION, KW_PARTITIONED, KW_RCFILE, KW_REFRESH,
   KW_REGEXP, KW_RENAME, KW_REPLACE, KW_RETURNS, KW_RIGHT, KW_RLIKE, KW_ROW, KW_SCHEMA,
@@ -230,10 +230,15 @@ terminal BigInteger INTEGER_LITERAL;
 terminal Double FLOATINGPOINT_LITERAL;
 terminal String STRING_LITERAL;
 terminal String UNMATCHED_STRING_LITERAL;
+terminal Integer MAGIC_N;
+
+
 
 nonterminal StatementBase stmt;
 // Single select statement.
 nonterminal SelectStmt select_stmt;
+//magic statement
+nonterminal MagicStmt magic_stmt;
 // Single values statement.
 nonterminal ValuesStmt values_stmt;
 // Select or union statement.
@@ -401,6 +406,8 @@ stmt ::=
   {: RESULT = show_tables; :}
   | show_dbs_stmt:show_dbs
   {: RESULT = show_dbs; :}
+  | magic_stmt:magic
+  {: RESULT = magic; :}
   | show_stats_stmt:show_stats
   {: RESULT = show_stats; :}
   | show_functions_stmt:show_functions
@@ -1237,6 +1244,22 @@ describe_output_style ::=
   {: RESULT = TDescribeTableOutputStyle.FORMATTED; :}
   | /* empty */
   {: RESULT = TDescribeTableOutputStyle.MINIMAL; :}
+  ;
+
+/*
+magic_stmt ::=
+  KW_MAGIC table_ref_list:tableRef KW_WITH select_list:l
+  {:
+    RESULT = new MagicStmt(tableRef,l);
+  :}
+  ;
+*/
+  
+magic_stmt ::=
+  KW_MAGIC select_stmt:l
+  {:
+    RESULT = new MagicStmt(l);
+  :}
   ;
 
 select_stmt ::=

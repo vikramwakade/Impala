@@ -73,7 +73,7 @@ void constructsubtree(
 	string name = cfgnode["name"];
 	string type = cfg.getRoot()[name]["type"];
 
-	//assert(*rootaddr == 0);		// Vikram
+	assert(*rootaddr == 0);
 
 	// Based on type: 
 	// 1. Allocate and chain in appropriate object

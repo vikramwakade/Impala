@@ -9,6 +9,7 @@
 #include "runtime/runtime-state.h"
 #include "runtime/row-batch.h"
 #include "util/debug-util.h"
+#include "util/disk-info.h"
 #include "util/runtime-profile.h"
 #include "gen-cpp/PlanNodes_types.h"
 
@@ -26,7 +27,7 @@ PythiaReaderNode::PythiaReaderNode(ObjectPool* pool, const TPlanNode& tnode,
       tuple_(NULL),
       batch_(NULL),
       done_(false) {
-  max_materialized_row_batches_ = 10;   // Need to look at this
+  max_materialized_row_batches_ = 10 * DiskInfo::num_disks();
   materialized_row_batches_.reset(new RowBatchQueue(max_materialized_row_batches_));
 }
 
@@ -87,7 +88,7 @@ void PythiaReaderNode::fail(const char* explanation) {
   throw QueryExecutionError();
 }
 
-Status PythiaReaderNode::compute() 
+Status PythiaReaderNode::Compute() 
 {
   Operator::GetNextResultT result; 
   result.first = Operator::Ready;
@@ -108,8 +109,7 @@ Status PythiaReaderNode::compute()
 
     Operator::Page::Iterator it = result.second->createIterator();
     void* ptuple;
-    int64_t val;
-    int counter;
+    int num_rows;
     while (true) {
       MemPool* pool;
       TupleRow* tuple_row;
@@ -117,34 +117,35 @@ Status PythiaReaderNode::compute()
 
       DCHECK_GT(max_tuples, 0);
       DCHECK(tuple_ != NULL);
-      counter = 0;
+      num_rows = 0;
 
       uint8_t* tuple_row_mem = reinterpret_cast<uint8_t*>(tuple_row);
       uint8_t* tuple_mem = reinterpret_cast<uint8_t*>(tuple_);
       Tuple* tuple = reinterpret_cast<Tuple*>(tuple_mem);
       while ((ptuple = it.next())) {
-        stream.str(std::string());
-        stream << q.getOutSchema().prettyprint(ptuple, '|') << endl;
+        //stream.str(std::string());
+        //stream << q.getOutSchema().prettyprint(ptuple, '|') << endl;
         //sscanf(stream.str().c_str(), "%ld\n", &val);
-        sscanf(stream.str().c_str(), "%*d|%ld\n", &val);
+        int64_t val = *reinterpret_cast<int64_t*>(ptuple);
+        
+        // Materialize a single tuple
         if (WriteCompleteTuple(pool, tuple, tuple_row, val)) {
-          counter++;
+          num_rows++;
           tuple_mem += tuple_desc_->byte_size();
           tuple_row_mem += batch_->row_byte_size();
           tuple = reinterpret_cast<Tuple*>(tuple_mem);
           tuple_row = reinterpret_cast<TupleRow*>(tuple_row_mem);
-        } else {
-          counter++;
         }
 
-        if (counter == max_tuples) {
-          RETURN_IF_ERROR(CommitRows(counter));
+        // If the current batch is full, commit the rows
+        if (num_rows == max_tuples) {
+          RETURN_IF_ERROR(CommitRows(num_rows));
           break;
         }
       }
-      DCHECK_LE(counter, max_tuples);
-      if (counter != max_tuples) {
-        RETURN_IF_ERROR(CommitLastRows(counter));
+      DCHECK_LE(num_rows, max_tuples);
+      if (num_rows != max_tuples) {
+        RETURN_IF_ERROR(CommitLastRows(num_rows));
         break;
       }
     }
@@ -168,7 +169,7 @@ void PythiaReaderNode::ScannerThread() {
   clock_t t1,t2;
   t1 = clock();
 
-  cfg.readFile("/home/vikram/pythia/drivers/test3.conf");
+  cfg.readFile("/home/vikram/pythia/drivers/test.conf");
   q.create(cfg);
 
   t2 = clock();
@@ -181,7 +182,7 @@ void PythiaReaderNode::ScannerThread() {
   diff = ((float)t1-(float)t2);
   cout << "ThreadInitTimeInSec: " << diff / CLOCKS_PER_SEC << endl;
 
-  compute();
+  Compute();
 
   q.threadClose();
 

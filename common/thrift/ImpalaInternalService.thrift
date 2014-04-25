@@ -76,6 +76,8 @@ struct TQueryOptions {
   // Max time in milliseconds the resource broker should wait for
   // a resource request to be granted by Llama/Yarn (only relevant with RM).
   22: optional i64 reservation_request_timeout
+//TEST change for 'MAGIC' command
+  23: optional i64 magic_num
 }
 
 // Impala currently has two types of sessions: Beeswax and HiveServer2

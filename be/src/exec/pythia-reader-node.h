@@ -112,7 +112,7 @@ class PythiaReaderNode : public ExecNode {
   Thread* thread;
 
   // Execute the query by calling Pythia
-  Status compute();
+  Status Compute();
 
   // Pythia's funtion
   void fail(const char* explanation);

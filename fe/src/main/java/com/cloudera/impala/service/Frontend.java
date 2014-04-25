@@ -37,6 +37,7 @@ import com.cloudera.impala.analysis.CreateUdfStmt;
 import com.cloudera.impala.analysis.DropFunctionStmt;
 import com.cloudera.impala.analysis.DropTableOrViewStmt;
 import com.cloudera.impala.analysis.InsertStmt;
+import com.cloudera.impala.analysis.MagicStmt;
 import com.cloudera.impala.analysis.QueryStmt;
 import com.cloudera.impala.analysis.ResetMetadataStmt;
 import com.cloudera.impala.analysis.ShowFunctionsStmt;
@@ -463,6 +464,10 @@ public class Frontend {
           new TColumn("summary", ColumnType.STRING.toThrift()))));
       result.setLoad_data_request(analysisResult.getLoadDataStmt().toThrift());
       return result;
+    } else if (analysisResult.getQueryStmt() instanceof MagicStmt) {
+      MagicStmt magic = (MagicStmt) analysisResult.getQueryStmt();
+      result.getQuery_options().setMagic_num(magic.getMagicNum());
+      System.out.println("****In frontend, got magic num as = "+result.getQuery_options().getMagic_num());
     }
 
     // create TQueryExecRequest

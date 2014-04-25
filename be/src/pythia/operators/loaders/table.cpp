@@ -235,12 +235,12 @@ Table::LoadErrorT MemMappedTable::doload(const string& filepattern,
 	assert(globout.gl_pathc < 0xFFFFFFull);
 	vector<unsigned long long> permutator;
 	permutator.resize(globout.gl_pathc, 0);
-	//init_gen_rand(time(NULL));		// Vikram
+	init_gen_rand(time(NULL));
 	for (unsigned int i=0; i<globout.gl_pathc; ++i)
 	{
 		if (globflags | GLOB_NOSORT)
 		{
-			//permutator[i]  = gen_rand64() & (~0xFFFFFFull);	// Vikram
+			permutator[i]  = gen_rand64() & (~0xFFFFFFull);
 		}
 		permutator[i] |= i & 0xFFFFFFull;
 	}

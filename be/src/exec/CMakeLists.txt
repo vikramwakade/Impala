@@ -96,7 +96,7 @@ add_library(Exec STATIC
   ../pythia/rawcompfns.cpp
   ../pythia/operators/memsegmentwriter.cpp
   ../pythia/operators/loaders/table.cpp
-  ../pythia/operators/loaders/sfmt/SFMT.c
+  ../pythia/operators/loaders/sfmt/SFMT.cpp
   ../pythia/operators/loaders/parser.cpp
   ../pythia/operators/loaders/loader.cpp
   ../pythia/operators/checker_callstate.cpp

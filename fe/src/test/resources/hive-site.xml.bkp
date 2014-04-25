@@ -1,0 +1,119 @@
+<?xml version="1.0"?>
+<?xml-stylesheet type="text/xsl" href="configuration.xsl"?>
+<!--
+   Licensed to the Apache Software Foundation (ASF) under one or more
+   contributor license agreements.  See the NOTICE file distributed with
+   this work for additional information regarding copyright ownership.
+   The ASF licenses this file to You under the Apache License, Version 2.0
+   (the "License"); you may not use this file except in compliance with
+   the License.  You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
+-->
+
+<configuration>
+
+<!-- Hive Configuration can either be stored in this file or in the hadoop configuration files  -->
+<!-- that are implied by Hadoop setup variables.                                                -->
+<!-- Aside from Hadoop setup variables - this file is provided as a convenience so that Hive    -->
+<!-- users do not have to edit hadoop configuration files (that may be managed as a centralized -->
+<!-- resource).                                                                                 -->
+<property>
+ <name>hive.metastore.uris</name>
+ <value>thrift://localhost:9083</value>
+</property>
+<property>
+ <name>javax.jdo.option.ConnectionURL</name>
+ <value>jdbc:postgresql://localhost:5432/hive_impala</value>
+</property>
+<property>
+ <name>javax.jdo.option.ConnectionDriverName</name>
+ <value>org.postgresql.Driver</value>
+</property>
+<property>
+ <name>javax.jdo.option.ConnectionUserName</name>
+ <value>hiveuser</value>
+</property>
+<property>
+ <name>javax.jdo.option.ConnectionPassword</name>
+ <value>password</value>
+</property>
+<property>
+  <name>datanucleus.autoCreateSchema</name>
+  <value>false</value>
+</property>
+<property>
+  <name>hive.support.concurrency</name>
+  <value>true</value>
+</property>
+<property>
+  <name>datanucleus.metadata.validate</name>
+  <value>false</value>
+</property>
+<property>
+  <name>hive.stats.dbclass</name>
+  <value>jdbc:postgresql</value>
+</property>
+<property>
+  <name>hive.stats.jdbcdriver</name>
+  <value>org.postgresql.Driver</value>
+</property>
+<property>
+  <name>datanucleus.fixedDatastore</name>
+  <value>false</value>
+</property>
+<property>
+  <name>hive.metastore.client.connect.retry.delay</name>
+  <value>0</value>
+  <description>Number of seconds for the client to wait between consecutive connection attempts</description>
+</property>
+<property>
+  <name>hive.metastore.client.socket.timeout</name>
+  <value>120</value>
+  <description>MetaStore Client socket timeout in seconds</description>
+</property>
+<property>
+  <!--  this should eventually be deprecated since the metastore should supply this -->
+  <name>hive.metastore.warehouse.dir</name>
+  <value>/test-warehouse</value>
+  <description></description>
+</property>
+
+<!--property>
+  <name>test.log.dir</name>
+  <value>${build.dir}/test/logs</value>
+  <description></description>
+</property-->
+
+<!--property>
+  <name>test.src.dir</name>
+  <value>file://${build.dir}/src/test</value>
+  <description></description>
+</property-->
+
+<property>
+  <name>hive.access.conf.url</name>
+  <value>file:////home/vikram/Impala/fe/src/test/resources/auth-site.xml</value>
+</property>
+
+<property>
+  <name>hive.metastore.rawstore.impl</name>
+  <value>org.apache.hadoop.hive.metastore.ObjectStore</value>
+  <description>Name of the class that implements org.apache.hadoop.hive.metastore.rawstore interface. This class is used to store and retrieval of raw metadata objects such as table, database</description>
+</property>
+
+<property>
+  <name>dfs.replication</name>
+  <value>3</value>
+</property>
+<property>
+  <name>hive.server2.authentication</name>
+  <value>NOSASL</value>
+</property>
+</configuration>

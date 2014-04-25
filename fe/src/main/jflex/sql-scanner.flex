@@ -130,6 +130,7 @@ import com.cloudera.impala.analysis.SqlParserSymbols;
     keywordMap.put("lines", new Integer(SqlParserSymbols.KW_LINES));
     keywordMap.put("load", new Integer(SqlParserSymbols.KW_LOAD));
     keywordMap.put("location", new Integer(SqlParserSymbols.KW_LOCATION));
+    keywordMap.put("magic", new Integer(SqlParserSymbols.KW_MAGIC));
     keywordMap.put("max", new Integer(SqlParserSymbols.KW_MAX));
     keywordMap.put("merge_fn", new Integer(SqlParserSymbols.KW_MERGE_FN));
     keywordMap.put("metadata", new Integer(SqlParserSymbols.KW_METADATA));

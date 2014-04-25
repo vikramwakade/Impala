@@ -26,6 +26,7 @@ include "Exprs.thrift"
 include "Types.thrift"
 
 enum TPlanNodeType {
+  MAGIC_NODE,
   HDFS_SCAN_NODE,
   HBASE_SCAN_NODE,
   HASH_JOIN_NODE,
@@ -98,6 +99,10 @@ struct TScanRange {
 }
 
 struct THdfsScanNode {
+  1: required Types.TTupleId tuple_id
+}
+
+struct TMagicGenNode {
   1: required Types.TTupleId tuple_id
 }
 
@@ -242,6 +247,7 @@ struct TPlanNode {
   13: optional TSortNode sort_node
   14: optional TMergeNode merge_node
   15: optional TExchangeNode exchange_node
+  16: optional TMagicGenNode magic_node
 }
 
 // A flattened representation of a tree of PlanNodes, obtained by depth-first
